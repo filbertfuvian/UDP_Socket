@@ -10,7 +10,7 @@ class UDPChatClientGUI:
         self.root = root
         self.root.title("UDP Chat Client")
         
-        # Configure main window layout
+        # display utama dari GUI
         self.chat_area = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, state='disabled')
         self.chat_area.pack(padx=10, pady=5, expand=True, fill=tk.BOTH)
         
@@ -23,7 +23,7 @@ class UDPChatClientGUI:
         self.file_button = tk.Button(self.root, text="Send File", command=self.send_file)
         self.file_button.pack(side=tk.RIGHT, padx=10, pady=5)
         
-        # Initialize client settings
+        # inisialisasi sisi client
         self.server_ip = None
         self.server_port = None
         self.password = None
@@ -49,12 +49,12 @@ class UDPChatClientGUI:
     def authenticate(self):
         """ Authenticate with the server """
         try:
-            # Kirim password ke server
+            # Mengirim password ke server
             self.client_socket.sendto(f"PASSWORD:{self.password}".encode('utf-8'), (self.server_ip, self.server_port))
             response, _ = self.client_socket.recvfrom(1024)
             
             if response.decode('utf-8') == "Enter your username:":
-                # Kirim username ke server dan periksa apakah diterima
+                # mengirim username ke server
                 while True:
                     self.client_socket.sendto(self.username.encode('utf-8'), (self.server_ip, self.server_port))
                     response, _ = self.client_socket.recvfrom(1024)
@@ -63,7 +63,7 @@ class UDPChatClientGUI:
                     if response_message == "Username accepted.":
                         self.add_message("[CONNECTED] Successfully connected to chat server.")
                         break
-                    elif response_message == "Username already taken. Please choose a different username.":
+                    elif response_message == "Username already taken. Please choose a different username.": #jika username sudah ada, response diambil dari server
                         self.username = simpledialog.askstring("Username Taken", "Username is taken. Enter a different username:", parent=self.root)
                     else:
                         self.add_message("[ERROR] Unexpected response from server.")
@@ -130,14 +130,13 @@ class UDPChatClientGUI:
         """ Allow user to choose a file and send it """
         filepath = filedialog.askopenfilename()
         if not filepath:
-            return  # No file selected, exit function
+            return  # jika tidak ada file yang dipilih, keluar dari fungsi
         filename = os.path.basename(filepath)
         
         try:
             with open(filepath, 'rb') as f:
                 file_data = f.read()
             
-            # Encode file data as hex and send without checksum (as file transfer does not need it)
             file_message = f"FILE:{filename}:{file_data.hex()}"
             self.client_socket.sendto(file_message.encode('utf-8'), (self.server_ip, self.server_port))
             self.add_message(f"[FILE SENT] {filename}")
@@ -151,23 +150,23 @@ class UDPChatClientGUI:
                 message = message.decode('utf-8')
                 print(f"[DEBUG] Raw received message: {message}")
 
-                # Handle acknowledgment
+                # menerima pesan Acknowledgement
                 if message.startswith("ACK:"):
                     ack_seq = int(message.split(":")[1])
                     if ack_seq == self.sequence_number:
                         self.ack_received.set()
-                    continue  # Skip further processing for ACK messages
+                    continue  # melanjutkan proses
                 
                 elif message.startswith("FILE:"):
-                    # File handling code (no changes needed)
+                    # mengatur file
                     _, filename, filedata_hex = message.split(":", 2)
                     filedata = bytes.fromhex(filedata_hex)
                     with open(filename, 'wb') as f:
                         f.write(filedata)
                     self.add_message(f"[FILE RECEIVED] {filename}")
-                    continue  # Skip further processing for file messages
+                    continue  
                 
-                # Split message into checksum and encrypted content
+            
                 try:
                     received_checksum, encrypted_message = message.split(":", 1)
                     received_checksum = int(received_checksum)
@@ -175,15 +174,15 @@ class UDPChatClientGUI:
                     print("[ERROR] Incorrect message format received!")
                     continue
 
-                # Decrypt the message content
+                # melakukan decrypt pesan
                 decrypted_message = self.decrypt(encrypted_message, self.caesar_shift)
                 print(f"[DEBUG] Decrypted message: {decrypted_message}")
 
-                # Calculate checksum on the decrypted message (original text)
+                
                 calculated_checksum = self.calculate_checksum(decrypted_message)
                 print(f"[DEBUG] Received checksum: {received_checksum}, Calculated checksum: {calculated_checksum}")
 
-                # Compare checksums
+                
                 if received_checksum != calculated_checksum:
                     self.add_message("[ERROR] Received message is corrupted!")
                 else:

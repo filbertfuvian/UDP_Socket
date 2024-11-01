@@ -28,9 +28,6 @@ class UDPChatServer:
             self.server_socket.close()
             raise
 
-    # Tambahkan fungsi is_username_taken di sini
-    def is_username_taken(self, username):
-        return username in self.clients.values()
 
     def encrypt(self, text, shift):
         result = ""
@@ -96,23 +93,23 @@ class UDPChatServer:
                     continue
 
                 if message.startswith("FILE:"):
-                    # Parse the file message format: "FILE:filename:filedata_in_hex"
+                    # melakukan parsing untuk pesan berbentuk format file
                     _, filename, filedata_hex = message.split(":", 2)
                     filedata = bytes.fromhex(filedata_hex)
                     
-                    # Define the file path within the "received_files" folder
+                    # menentukan direction dari file yang diterima
                     file_path = os.path.join(self.files_folder, filename)
 
-                    # Save the file
+                    # menyimpan file pada direction yang ditentukan
                     with open(file_path, 'wb') as f:
                         f.write(filedata)
                     print(f"[FILE RECEIVED] {filename} saved to {file_path}")
                     self.save_message(f"[FILE RECEIVED] {filename} from {client_addr}")
                     
-                    # Broadcast file notification to other clients
+                    # pemberitahuan terkait file yang disimpan
                     self.broadcast(f"FILE:{filename}:{filedata_hex}", client_addr)
                 else:
-                    # Text message handling code (no changes needed)
+                    # handling untuk pesan text biasa
                     seq, checksum, msg_content = message.split(":", 2)
                     seq = int(seq)
                     received_checksum = int(checksum)
@@ -141,12 +138,12 @@ class UDPChatServer:
 
     def broadcast(self, message, sender_addr):
         if message.startswith("FILE:"):
-            # Directly broadcast the file message to all clients
+            # melakukan pemberitahuan pesan file kepada clients
             for client_addr in self.clients:
                 if client_addr != sender_addr:
                     self.server_socket.sendto(message.encode('utf-8'), client_addr)
         else:
-            # For regular messages
+            # pemberitahuan pesan biasa
             encrypted_message = self.encrypt(message, self.caesar_shift)
             checksum = self.calculate_checksum(message)
             self.save_message(message)
