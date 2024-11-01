@@ -1,91 +1,116 @@
 import socket
 import threading
 import time
-import binascii  # Untuk menghitung checksum CRC32
-import struct    # Untuk mengemas data dengan checksum
+import binascii
+import os
 
-class UDPChatClient:
-    def __init__(self, server_ip, server_port, password, username, caesar_shift=3):
-        self.server_ip = server_ip
-        self.server_port = server_port
+class UDPChatServer:
+    def __init__(self, ip='127.0.0.1', port=12345, password='secret', caesar_shift=3):
+        self.server_ip = ip
+        self.server_port = port
         self.password = password
-        self.username = username
-        self.sequence_number = 0
-        self.ack_received = threading.Event()
         self.caesar_shift = caesar_shift
-        
-        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.authenticate()
-    
-    def caesar_encrypt(self, text):
+        self.clients = {}
+        self.acknowledgments = {}
+        self.lock = threading.Lock()
+        self.chat_history_file = "server_chat_history.txt"
+
+        # Inisialisasi socket server
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.server_socket.bind((self.server_ip, self.server_port))
+            print(f"[SERVER STARTED] Listening on {self.server_ip}:{self.server_port}")
+        except socket.error as e:
+            print(f"[ERROR] Server bind failed: {e}")
+            self.server_socket.close()
+            raise
+
+    def encrypt(self, text, shift):
         result = ""
         for char in text:
             if char.isalpha():
-                shift = 65 if char.isupper() else 97
-                result += chr((ord(char) + self.caesar_shift - shift) % 26 + shift)
+                base = 65 if char.isupper() else 97
+                result += chr((ord(char) + shift - base) % 26 + base)
             else:
                 result += char
         return result
 
-    def caesar_decrypt(self, text):
-        result = ""
-        for char in text:
-            if char.isalpha():
-                shift = 65 if char.isupper() else 97
-                result += chr((ord(char) - self.caesar_shift - shift) % 26 + shift)
-            else:
-                result += char
-        return result
+    def decrypt(self, text, shift):
+        return self.encrypt(text, -shift)
 
     def calculate_checksum(self, data):
         return binascii.crc32(data.encode('utf-8'))
 
-    def send_message(self, message):
-        encrypted_message = self.caesar_encrypt(message)
-        checksum = self.calculate_checksum(message)
-        message_with_seq = f"{self.sequence_number}:{checksum}:{encrypted_message}"
-        self.client_socket.sendto(message_with_seq.encode('utf-8'), (self.server_ip, self.server_port))
-        
-        if self.ack_received.wait(timeout=5):
-            self.sequence_number += 1
-            self.ack_received.clear()
-        else:
-            print("[ERROR] Timeout, message will be resent")
-            self.send_message(message)
+    def save_message(self, message):
+        try:
+            with open(self.chat_history_file, "a") as f:
+                f.write(message + "\n")
+        except IOError as e:
+            print(f"[ERROR] Failed to save message: {e}")
 
-    def receive_messages(self):
+    def handle_client_auth(self, message, client_addr):
+        if message.split(":")[1] == self.password:
+            self.server_socket.sendto("Enter your username:".encode('utf-8'), client_addr)
+            username, _ = self.server_socket.recvfrom(1024)
+            username = username.decode('utf-8')
+            with self.lock:
+                self.clients[client_addr] = username
+                self.acknowledgments[client_addr] = 0
+            print(f"[NEW CONNECTION] {username} has joined from {client_addr}")
+            self.broadcast(f"{username} has joined the chat!", client_addr)
+            self.save_message(f"[NEW CONNECTION] {username} has joined from {client_addr}")
+        else:
+            self.server_socket.sendto("Incorrect password!".encode('utf-8'), client_addr)
+
+    def handle_messages(self):
         while True:
-            message, _ = self.client_socket.recvfrom(4096)
-            message = message.decode('utf-8')
-            
-            if message.startswith("ACK:"):
-                ack_seq = int(message.split(":")[1])
-                if ack_seq == self.sequence_number:
-                    self.ack_received.set()
-            else:
-                checksum, msg_content = message.split(":", 1)
-                calculated_checksum = self.calculate_checksum(msg_content)
-                
-                if int(checksum) != calculated_checksum:
-                    print("[ERROR] Received message is corrupted!")
-                else:
-                    decrypted_message = self.caesar_decrypt(msg_content)
-                    print(decrypted_message)
+            try:
+                message, client_addr = self.server_socket.recvfrom(4096)
+                message = message.decode('utf-8')
+
+                if client_addr not in self.clients:
+                    if message.startswith("PASSWORD:"):
+                        self.handle_client_auth(message, client_addr)
+                    continue
+
+                seq, checksum, msg_content = message.split(":", 2)
+                seq = int(seq)
+                received_checksum = int(checksum)
+                decrypted_message = self.decrypt(msg_content, self.caesar_shift)
+                calculated_checksum = self.calculate_checksum(decrypted_message)
+
+                if received_checksum != calculated_checksum:
+                    print(f"[ERROR] Message from {client_addr} is corrupted!")
+                    continue
+
+                username = self.clients[client_addr]
+                log_message = f"[MESSAGE RECEIVED] {username}: {decrypted_message}"
+                print(log_message)
+                self.save_message(log_message)
+
+                ack_message = f"ACK:{seq}"
+                self.server_socket.sendto(ack_message.encode('utf-8'), client_addr)
+
+                with self.lock:
+                    if seq == self.acknowledgments[client_addr]:
+                        self.broadcast(f"{username}: {decrypted_message}", client_addr)
+                        self.acknowledgments[client_addr] += 1
+            except Exception as e:
+                print(f"[ERROR] {e}")
+
+    def broadcast(self, message, sender_addr):
+        encrypted_message = self.encrypt(message, self.caesar_shift)
+        checksum = self.calculate_checksum(message)
+        self.save_message(message)
+        for client_addr in self.clients:
+            if client_addr != sender_addr:
+                message_with_checksum = f"{checksum}:{encrypted_message}"
+                self.server_socket.sendto(message_with_checksum.encode('utf-8'), client_addr)
 
     def start(self):
-        while True:
-            command = input("")
-            if command.startswith("sendfile "):
-                filepath = command.split(" ", 1)[1]
-                self.send_file(filepath)
-            else:
-                self.send_message(command)
+        print("[SERVER ACTIVE] Waiting for messages...")
+        self.handle_messages()
 
 if __name__ == "__main__":
-    server_ip = input("Enter server IP: ")
-    server_port = int(input("Enter server port: "))
-    password = input("Enter password: ")
-    username = input("Enter your username: ")
-    
-    client = UDPChatClient(server_ip, server_port, password, username)
-    client.start()
+    server = UDPChatServer()
+    server.start()
