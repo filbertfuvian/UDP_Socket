@@ -49,11 +49,27 @@ class UDPChatClientGUI:
     def authenticate(self):
         """ Authenticate with the server """
         try:
+            # Kirim password ke server
             self.client_socket.sendto(f"PASSWORD:{self.password}".encode('utf-8'), (self.server_ip, self.server_port))
             response, _ = self.client_socket.recvfrom(1024)
+            
             if response.decode('utf-8') == "Enter your username:":
-                self.client_socket.sendto(self.username.encode('utf-8'), (self.server_ip, self.server_port))
-                self.add_message("[CONNECTED] Successfully connected to chat server.")
+                # Kirim username ke server dan periksa apakah diterima
+                while True:
+                    self.client_socket.sendto(self.username.encode('utf-8'), (self.server_ip, self.server_port))
+                    response, _ = self.client_socket.recvfrom(1024)
+                    response_message = response.decode('utf-8')
+                    
+                    if response_message == "Username accepted.":
+                        self.add_message("[CONNECTED] Successfully connected to chat server.")
+                        break
+                    elif response_message == "Username already taken. Please choose a different username.":
+                        self.username = simpledialog.askstring("Username Taken", "Username is taken. Enter a different username:", parent=self.root)
+                    else:
+                        self.add_message("[ERROR] Unexpected response from server.")
+                        break
+                
+                # Mulai thread untuk menerima pesan setelah username diterima
                 threading.Thread(target=self.receive_messages, daemon=True).start()
             else:
                 messagebox.showerror("Error", "Incorrect password!")

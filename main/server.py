@@ -5,7 +5,8 @@ import binascii
 import os
 
 class UDPChatServer:
-    def __init__(self, ip='127.0.0.1', port=12345, password='secret', caesar_shift=3):
+    def __init__(self, ip='192.168.100.73', port=12345, password='secret', caesar_shift=3):
+        # Inisialisasi server dan atribut lain
         self.server_ip = ip
         self.server_port = port
         self.password = password
@@ -14,13 +15,11 @@ class UDPChatServer:
         self.acknowledgments = {}
         self.lock = threading.Lock()
         self.chat_history_file = "server_chat_history.txt"
-        self.files_folder = "received_files"  # Folder to store received files
+        self.files_folder = "received_files"
 
-        # Create folder for received files if it doesn't exist
         if not os.path.exists(self.files_folder):
             os.makedirs(self.files_folder)
 
-        # Inisialisasi socket server
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self.server_socket.bind((self.server_ip, self.server_port))
@@ -29,6 +28,10 @@ class UDPChatServer:
             print(f"[ERROR] Server bind failed: {e}")
             self.server_socket.close()
             raise
+
+    # Tambahkan fungsi is_username_taken di sini
+    def is_username_taken(self, username):
+        return username in self.clients.values()
 
     def encrypt(self, text, shift):
         result = ""
@@ -52,20 +55,34 @@ class UDPChatServer:
                 f.write(message + "\n")
         except IOError as e:
             print(f"[ERROR] Failed to save message: {e}")
+    
+    # untuk mengecek apakah username unique atau tidak
+    def is_username_taken(self, username):
+        with self.lock:
+            return username in self.clients.values()
 
     def handle_client_auth(self, message, client_addr):
         if message.split(":")[1] == self.password:
             self.server_socket.sendto("Enter your username:".encode('utf-8'), client_addr)
-            username, _ = self.server_socket.recvfrom(1024)
-            username = username.decode('utf-8')
-            with self.lock:
-                self.clients[client_addr] = username
-                self.acknowledgments[client_addr] = 0
-            print(f"[NEW CONNECTION] {username} has joined from {client_addr}")
-            self.broadcast(f"{username} has joined the chat!", client_addr)
-            self.save_message(f"[NEW CONNECTION] {username} has joined from {client_addr}")
+            
+            while True:
+                username, _ = self.server_socket.recvfrom(1024)
+                username = username.decode('utf-8')
+                
+                if self.is_username_taken(username):
+                    self.server_socket.sendto("Username already taken. Please choose a different username.".encode('utf-8'), client_addr)
+                else:
+                    with self.lock:
+                        self.clients[client_addr] = username
+                        self.acknowledgments[client_addr] = 0
+                    self.server_socket.sendto("Username accepted.".encode('utf-8'), client_addr)
+                    print(f"[NEW CONNECTION] {username} has joined from {client_addr}")
+                    self.broadcast(f"{username} has joined the chat!", client_addr)
+                    self.save_message(f"[NEW CONNECTION] {username} has joined from {client_addr}")
+                    break
         else:
             self.server_socket.sendto("Incorrect password!".encode('utf-8'), client_addr)
+
 
     def handle_messages(self):
         while True:
